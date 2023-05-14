@@ -14,9 +14,25 @@ const PERIODS: &[u64] = &[SECOND, MINUTE, HOUR, DAY, WEEK, MONTH, YEAR];
 const PERIOD_NAMES: &[&str] = &["sec", "min", "hour", "day", "week", "month", "year"];
 
 fn main() {
+    let mut pargs = pico_args::Arguments::from_env();
+    if pargs.contains(["-h", "--help"]) || env::args().len() == 1 {
+        println!("Usage: {PROG_NAME} <number> <unit> / <period>");
+        println!("       <number>: integer or float (no scientific notation)");
+        println!("       <unit>  : {}", UNITS.join(" "));
+        println!("       <period>: {}", PERIOD_NAMES.join(" "));
+        exit(0);
+    }
+    if pargs.contains(["-v", "--version"]) {
+        println!("{PROG_NAME} {}", env!("CARGO_PKG_VERSION"));
+        exit(0);
+    }
+
     let mut s = String::new();
+    let mut sep: &str = "";
     for a in env::args().skip(1) {
+        s.push_str(sep);
         s.push_str(a.as_str());
+        sep = " ";
     }
     match parse(&s) {
         Ok(res) => {
@@ -28,8 +44,8 @@ fn main() {
                 println!("{:>7.3?} {:>2} / {}", rate, unit, period_name);
             }
         }
-        Err(_) => {
-            eprintln!("{PROG_NAME}: invalid input");
+        Err(e) => {
+            eprintln!("{PROG_NAME}: {e}");
             exit(1);
         }
     }
@@ -42,8 +58,8 @@ fn nearest_power_of_1000_rate(mut bytes: f64) -> (f64, &'static str) {
         }
         bytes /= 1000.0;
     }
-
-    return (0.0, "NA");
+    // If you didn't fit in yottabytes, you might as well be considered infinite.
+    return (f64::INFINITY, "B");
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +110,28 @@ enum ParseError {
     InvalidNumber,
     InvalidUnit,
     InvalidPeriod,
-    UnexpectedCharacter,
+    UnexpectedCharacter { expected: u8, actual: u8 },
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidNumber => write!(f, "not a valid number"),
+            Self::InvalidUnit => write!(f, "not a recognized unit ({})", UNITS.join(" ")),
+            Self::InvalidPeriod => write!(
+                f,
+                "not a recognized time period ({})",
+                PERIOD_NAMES.join(" ")
+            ),
+            Self::UnexpectedCharacter { expected, actual } => {
+                write!(
+                    f,
+                    "expected {:?}, found {:?}",
+                    *expected as char, *actual as char
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -123,7 +160,7 @@ fn parse(s: &str) -> Result<ParseResult, ParseError> {
     p.skip_whitespace();
     let rate: f64 = p.parse_number()?;
     p.skip_whitespace();
-    let byte_multiplier: f64 = p.parse_unit()?;
+    let byte_multiplier: f64 = p.parse_bytes()?;
     p.skip_whitespace();
     p.expect(b'/')?;
     p.skip_whitespace();
@@ -166,7 +203,7 @@ impl<'a> Parser<'a> {
         if actual == expected {
             return Ok(actual);
         }
-        return Err(ParseError::UnexpectedCharacter);
+        return Err(ParseError::UnexpectedCharacter { expected, actual });
     }
 
     fn skip_whitespace(&mut self) {
@@ -205,7 +242,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_unit(&mut self) -> Result<f64, ParseError> {
+    /// Parses strings like "B", "MB", "TB", etc. and returns how many
+    /// bytes that it (e.g., "B" -> 1, "MB" -> 1e6, "TB" -> 1e12).
+    fn parse_bytes(&mut self) -> Result<f64, ParseError> {
         let start_pos = self.pos;
         while !self.eof() && self.peek().is_ascii_alphabetic() {
             self.advance();
@@ -225,11 +264,93 @@ impl<'a> Parser<'a> {
             self.advance();
         }
         let period = unsafe { std::str::from_utf8_unchecked(&self.buf[start_pos..self.pos]) };
-        match Period::try_from(period) {
+        let period = period.to_ascii_lowercase();
+        match Period::try_from(period.as_str()) {
             Ok(p) => Ok(p),
             Err(()) => Err(ParseError::InvalidPeriod),
         }
     }
+}
+
+#[test]
+fn test_parse_whitespaces() {
+    // See that we can put whitespaces pretty much everywhere
+    assert!(parse("1B/s").is_ok());
+    assert!(parse("1 B/s").is_ok());
+    assert!(parse("1B /s").is_ok());
+    assert!(parse("1B/ s").is_ok());
+    assert!(parse("1B / s").is_ok());
+    assert!(parse("1 B/ s").is_ok());
+    assert!(parse("1 B / s").is_ok());
+    assert!(parse(" 1 B / s ").is_ok());
+}
+
+#[test]
+fn test_parse_units() {
+    // Try the different units and with different casing.
+    assert!(parse("1 b / s").is_ok());
+    assert!(parse("1 B / s").is_ok());
+    assert!(parse("1 kB / s").is_ok());
+    assert!(parse("1 Kb / s").is_ok());
+    assert!(parse("1 KB / s").is_ok());
+    assert!(parse("1 MB / s").is_ok());
+    assert!(parse("1 GB / s").is_ok());
+    assert!(parse("1 TB / s").is_ok());
+    assert!(parse("1 PB / s").is_ok());
+    assert!(parse("1 EB / s").is_ok());
+    assert!(parse("1 ZB / s").is_ok());
+    assert!(parse("1 YB / s").is_ok());
+}
+
+#[test]
+fn test_parse_periods() {
+    // Try the different period spellings and with different casing.
+    assert!(parse("1 B / s").is_ok());
+    assert!(parse("1 B / S").is_ok());
+    assert!(parse("1 B / sec").is_ok());
+    assert!(parse("1 B / SEC").is_ok());
+    assert!(parse("1 B / SeC").is_ok());
+    assert!(parse("1 B / SEC").is_ok());
+    assert!(parse("1 B / second").is_ok());
+    assert!(parse("1 B / m").is_ok());
+    assert!(parse("1 B / min").is_ok());
+    assert!(parse("1 B / minute").is_ok());
+    assert!(parse("1 B / h").is_ok());
+    assert!(parse("1 B / hr").is_ok());
+    assert!(parse("1 B / hour").is_ok());
+    assert!(parse("1 B / d").is_ok());
+    assert!(parse("1 B / day").is_ok());
+    assert!(parse("1 B / w").is_ok());
+    assert!(parse("1 B / wk").is_ok());
+    assert!(parse("1 B / week").is_ok());
+    assert!(parse("1 B / mon").is_ok());
+    assert!(parse("1 B / month").is_ok());
+    assert!(parse("1 B / y").is_ok());
+    assert!(parse("1 B / yr").is_ok());
+    assert!(parse("1 B / year").is_ok());
+}
+
+#[test]
+fn test_parse_invalid_inputs() {
+    // All sorts of invalid input. I probably cannot think of
+    // all the weird-ass ways to get an error though.
+    assert!(parse("").is_err());
+    assert!(parse("1").is_err());
+    assert!(parse("1B").is_err());
+    assert!(parse("1B/").is_err());
+    assert!(parse("1Bps").is_err());
+    assert!(parse("1Bs").is_err());
+    assert!(parse("1B:s").is_err());
+
+    assert!(parse("x MB/s").is_err());
+    assert!(parse("1e7 MB/s").is_err());
+    assert!(parse("-33 MB/s").is_err());
+    assert!(parse("192.168.1.1 MB/s").is_err());
+    assert!(parse("４ MB/s").is_err()); // wide digits
+
+    assert!(parse("4 XB/s").is_err());
+    assert!(parse("4 ML/s").is_err());
+    assert!(parse("4 MMMB/s").is_err());
 }
 
 #[rustfmt::skip]
@@ -254,23 +375,32 @@ fn test_parse_number() {
     assert_eq!(p.parse_number(), Ok(1.25));
 }
 
-#[rustfmt::skip]
 #[test]
-fn test_parse_period() {
-    use Period::*;
-    let table: Vec<(Period, &[&str])> = vec![
-        (Second, &["s", "sec", "second"]),
-        (Minute, &["m", "min", "minute"]),
-        (Hour, &["h", "hr", "hour"]),
-        (Day, &["d", "day"]),
-        (Week, &["w", "wk", "week"]),
-        (Month, &["mon", "month"]),
-        (Year, &["y", "yr", "year"]),
-    ];
-    for (period, string_reps) in table {
-        for rep in string_reps.iter() {
-            let mut p = Parser { buf: rep.as_bytes(), pos: 0 };
-            assert_eq!(p.parse_period(), Ok(period));
-        }
-    }
+fn test_parse_unit() {
+    let mut p = Parser { buf: b"B", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1.0));
+
+    let mut p = Parser { buf: b"KB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e3));
+
+    let mut p = Parser { buf: b"MB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e6));
+
+    let mut p = Parser { buf: b"GB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e9));
+
+    let mut p = Parser { buf: b"TB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e12));
+
+    let mut p = Parser { buf: b"PB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e15));
+
+    let mut p = Parser { buf: b"EB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e18));
+
+    let mut p = Parser { buf: b"ZB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e21));
+
+    let mut p = Parser { buf: b"YB", pos: 0 };
+    assert_eq!(p.parse_bytes(), Ok(1e24));
 }
