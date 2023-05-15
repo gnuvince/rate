@@ -223,7 +223,7 @@ impl<'a> Parser<'a> {
         if start_pos == self.pos {
             return Err(ParseError::InvalidNumber);
         }
-        // No decimals
+
         if self.peek() == b'.' {
             self.advance(); // eat the '.'
             let decimals_start = self.pos;
