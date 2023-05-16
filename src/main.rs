@@ -35,12 +35,11 @@ fn main() {
         sep = " ";
     }
     match parse(&s) {
-        Ok(res) => {
-            let normalized = res.normalized();
+        Ok(bytes_per_second) => {
             for i in 0..PERIODS.len() {
                 let period = PERIODS[i];
                 let period_name = PERIOD_NAMES[i];
-                let (rate, unit) = nearest_power_of_1000_rate(normalized.rate * period as f64);
+                let (rate, unit) = nearest_power_of_1000_rate(bytes_per_second * period as f64);
                 println!("{:>7.3?} {:>2} / {}", rate, unit, period_name);
             }
         }
@@ -62,46 +61,16 @@ fn nearest_power_of_1000_rate(mut bytes: f64) -> (f64, &'static str) {
     return (f64::INFINITY, "B");
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Period {
-    Second,
-    Minute,
-    Hour,
-    Day,
-    Week,
-    Month,
-    Year,
-}
-
-impl Period {
-    fn as_seconds(&self) -> f64 {
-        let seconds = match self {
-            Period::Second => SECOND,
-            Period::Minute => MINUTE,
-            Period::Hour => HOUR,
-            Period::Day => DAY,
-            Period::Week => WEEK,
-            Period::Month => MONTH,
-            Period::Year => YEAR,
-        };
-        return seconds as f64;
-    }
-}
-
-impl TryFrom<&str> for Period {
-    type Error = ();
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "s" | "sec" | "second" => Ok(Period::Second),
-            "m" | "min" | "minute" => Ok(Period::Minute),
-            "h" | "hr" | "hour" => Ok(Period::Hour),
-            "d" | "day" => Ok(Period::Day),
-            "w" | "wk" | "week" => Ok(Period::Week),
-            "mon" | "month" => Ok(Period::Month),
-            "y" | "yr" | "year" => Ok(Period::Year),
-            _ => Err(()),
-        }
+fn period_to_seconds(period_name: &str) -> Result<u64, ParseError> {
+    match period_name {
+        "s" | "sec" | "second" => Ok(SECOND),
+        "m" | "min" | "minute" => Ok(MINUTE),
+        "h" | "hr" | "hour" => Ok(HOUR),
+        "d" | "day" => Ok(DAY),
+        "w" | "wk" | "week" => Ok(WEEK),
+        "mon" | "month" => Ok(MONTH),
+        "y" | "yr" | "year" => Ok(YEAR),
+        _ => Err(ParseError::InvalidPeriod),
     }
 }
 
@@ -134,25 +103,7 @@ impl std::fmt::Display for ParseError {
     }
 }
 
-#[derive(Debug)]
-struct ParseResult {
-    rate: f64,
-    byte_multiplier: f64,
-    period: Period,
-}
-
-impl ParseResult {
-    fn normalized(&self) -> Self {
-        let rate = self.rate * self.byte_multiplier / self.period.as_seconds();
-        ParseResult {
-            rate,
-            byte_multiplier: 1.0,
-            period: Period::Second,
-        }
-    }
-}
-
-fn parse(s: &str) -> Result<ParseResult, ParseError> {
+fn parse(s: &str) -> Result<f64, ParseError> {
     let mut p = Parser {
         buf: s.as_bytes(),
         pos: 0,
@@ -164,12 +115,8 @@ fn parse(s: &str) -> Result<ParseResult, ParseError> {
     p.skip_whitespace();
     p.expect(b'/')?;
     p.skip_whitespace();
-    let period: Period = p.parse_period()?;
-    return Ok(ParseResult {
-        rate,
-        byte_multiplier,
-        period,
-    });
+    let seconds: f64 = p.parse_period()?;
+    return Ok(rate * byte_multiplier / seconds);
 }
 
 struct Parser<'a> {
@@ -258,17 +205,15 @@ impl<'a> Parser<'a> {
         return Err(ParseError::InvalidUnit);
     }
 
-    fn parse_period(&mut self) -> Result<Period, ParseError> {
+    fn parse_period(&mut self) -> Result<f64, ParseError> {
         let start_pos = self.pos;
         while !self.eof() && self.peek().is_ascii_alphabetic() {
             self.advance();
         }
         let period = unsafe { std::str::from_utf8_unchecked(&self.buf[start_pos..self.pos]) };
         let period = period.to_ascii_lowercase();
-        match Period::try_from(period.as_str()) {
-            Ok(p) => Ok(p),
-            Err(()) => Err(ParseError::InvalidPeriod),
-        }
+        let seconds = period_to_seconds(&period)? as f64;
+        return Ok(seconds);
     }
 }
 
