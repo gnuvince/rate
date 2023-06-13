@@ -16,14 +16,14 @@ const PERIOD_NAMES: &[&str] = &["sec", "min", "hour", "day", "week", "month", "y
 fn main() {
     let mut pargs = pico_args::Arguments::from_env();
     if pargs.contains(["-h", "--help"]) || env::args().len() == 1 {
-        println!("Usage: {PROG_NAME} <number> <unit> / <period>");
+        println!("Usage: {} <number> <unit> / <period>", PROG_NAME);
         println!("       <number>: integer or float (no scientific notation)");
         println!("       <unit>  : {}", UNITS.join(" "));
         println!("       <period>: {}", PERIOD_NAMES.join(" "));
         exit(0);
     }
     if pargs.contains(["-v", "--version"]) {
-        println!("{PROG_NAME} {}", env!("CARGO_PKG_VERSION"));
+        println!("{} {}", PROG_NAME, env!("CARGO_PKG_VERSION"));
         exit(0);
     }
 
@@ -44,7 +44,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("{PROG_NAME}: {e}");
+            eprintln!("{}: {}", PROG_NAME, e);
             exit(1);
         }
     }
